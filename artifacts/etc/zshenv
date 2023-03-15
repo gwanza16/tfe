@@ -1,0 +1,27 @@
+export PATH=${PATH}:${HOME}/bin
+
+# for rvm
+export PATH="$PATH:$HOME/.rvm/bin" # Add RVM to PATH for scripting
+
+# for android
+export ANDROID_HOME=/usr/local/opt/android-sdk
+export PATH=${PATH}:${ANDROID_SDK_ROOT}/tools:${ANDROID_SDK_ROOT}/platform-tools
+
+# for java
+#export JAVA_HOME=`/usr/libexec/java_home -v 1.6`
+export JAVA_HOME=`/usr/libexec/java_home -v 1.8`
+export PATH=${PATH}:${JAVA_HOME}/bin
+
+# for cocoapods
+export LC_ALL="en_US.UTF-8"
+
+# for go
+export GOPATH=$HOME
+
+# for nodebrew
+export PATH=$HOME/.nodebrew/current/bin:$PATH
+
+# for homebrew
+export PATH=/usr/local/bin:${PATH}
+
+eval "$(direnv hook zsh)"

@@ -1,0 +1,57 @@
+export PS1="\[\e[31m\][\[\e[m\]\[\e[38;5;172m\]\u\[\e[m\]@\[\e[38;5;153m\]\h\[\e[m\] \[\e[38;5;214m\]\W\[\e[m\]\[\e[31m\]]\[\e[m\]\\$ "
+
+cat<<'EOF'
+           _..._
+         .'     '.
+        /  _   _  \
+        | (o)_(o) |
+         \(     ) /
+         //'._.'\ \
+        //   .   \ \
+       ||   .     \ \
+       |\   :     / |
+       \ `) '   (`  /_
+     _)``".____,.'"` (_
+     )     )'--'(     (
+      '---`      `---`
+EOF
+
+# The next line updates PATH for the Google Cloud SDK.
+if [ -f '/home/forensicrs/google-cloud-sdk/path.bash.inc' ]; then . '/home/forensicrs/google-cloud-sdk/path.bash.inc'; fi
+
+# The next line enables shell command completion for gcloud.
+if [ -f '/home/forensicrs/google-cloud-sdk/completion.bash.inc' ]; then . '/home/forensicrs/google-cloud-sdk/completion.bash.inc'; fi
+
+export HISTCONTROL=ignoreboth:erasedups
+shopt -s histappend
+export PROMPT_COMMAND="history -a; history -n"
+export HISTIGNORE="ls:ll:cd:pwd:bg:fg:history"
+export HISTSIZE=100000
+export HISTFILESIZE=10000000
+shopt -s histappend histreedit histverify
+shopt -s no_empty_cmd_completion
+export HISTTIMEFORMAT="%d/%m/%y %T "
+alias update='sudo -- sh -c "apt update && apt -y upgrade && apt -y --purge autoremove && sudo apt -y clean"'
+alias cp='cp -i'
+alias mv='mv -i'
+alias rm='rm -i'
+alias l.='ls -d .* --color=auto'
+alias xzegrep='xzegrep --color=auto'
+alias xzfgrep='xzfgrep --color=auto'
+alias xzgrep='xzgrep --color=auto'
+alias zegrep='zegrep --color=auto'
+alias zfgrep='zfgrep --color=auto'
+alias zgrep='zgrep --color=auto'
+
+export PATH=$PATH:/home/forensicrs/.2fa/
+_decrypt_key_sh(){
+	local services
+	services=$(find "/home/forensicrs/.2fa/" -type d -printf "%f " | sed 's/.2fa\///')
+	complete -W "$services" decrypt.key.sh
+	complete -W "$services" ~/.2fa/decrypt.key.sh
+}
+
+complete -F _decrypt_key_sh decrypt.key.sh
+complete -C '/usr/local/bin/aws_completer' aws
+export EDITOR=vim
+export VISUAL=vim
