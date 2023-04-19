@@ -11,8 +11,7 @@ use std::{
 };
 
 use crate::prelude::{
-    bash::BashHistory,
-    group::{process_group_file, Group},
+    group::{ Group, SystemGroups}, bash::BashHistory, zsh::{ZshRcConfig, ZshHistory}, authorized_keys::AuthorizedKey, known_hosts::KnownHost, crontab::{CrontabTask, CrontabSchedule}, services::{InitdService, SystemdService},
 };
 pub use crate::{BashRcConfig, ChRootFileSystem};
 
@@ -38,39 +37,92 @@ pub struct UserInfo {
     pub groups: Vec<Group>,
 }
 
-/*pub struct UserArtifact {
-    bash_config: BashRcConfig,
-    user_info: UserInfo,
-}*/
-
-impl UserInfo {
-    pub fn load_bash_config(
-        &self,
-        fs: &mut impl VirtualFileSystem,
-    ) -> ForensicResult<BashRcConfig> {
-        let mut rc_config = BashRcConfig::default();
-        rc_config.process_bashrcfile(self.home.as_path(), fs);
-
-        Ok(rc_config)
-    }
-
-    pub fn load_bash_history(
-        &self,
-        fs: &mut impl VirtualFileSystem,
-    ) -> ForensicResult<BashHistory> {
-        let mut bash_history = BashHistory::default();
-
-        let user_home = self.home.as_path().join(".bash_history");
-
-        bash_history.read_history_timestamps(user_home, fs);
-
-        Ok(bash_history)
-    }
-}
-
+#[derive(Debug, Default, Clone)]
 pub struct SystemInfo {
     pub users: Vec<UserInfo>,
 }
+
+#[derive(Debug, Default, Clone)]
+pub struct UserArtifact {
+    pub user_info: UserInfo,
+    pub bash_config: BashRcConfig,
+    pub bash_history: BashHistory,
+    pub zsh_config: ZshRcConfig,
+    pub zsh_history: ZshHistory,
+    pub authorized_keys: Vec<AuthorizedKey>,
+    pub known_hosts: Vec<KnownHost>,
+    pub programmed_tasks: Vec<CrontabTask>,
+    pub groups: Vec<Group>,
+    pub init_services: Vec<InitdService>,
+    pub systemd_services: Vec<SystemdService>
+}
+
+impl UserArtifact {
+    pub fn get_user_artifacts(username: String, vfs: &mut impl VirtualFileSystem) -> ForensicResult<Self> {
+        let userinfo = UserInfo::get_user_info(username, vfs)?;
+        let mut crontab_schedule = CrontabSchedule::default();
+        let system_groups = SystemGroups::process_group_file(vfs)?;
+
+        Ok(UserArtifact {
+            user_info: userinfo.clone(),
+            bash_config: BashRcConfig::load_bash_config(userinfo.clone(), vfs)?,
+            bash_history: BashHistory::load_bash_history(userinfo.clone(), vfs)?,
+            zsh_config: ZshRcConfig::load_zsh_config(userinfo.clone(), vfs)?,
+            zsh_history: ZshHistory::load_zsh_history(userinfo.clone(), vfs)?,
+            authorized_keys: AuthorizedKey::get_authorized_keys(vfs, 
+                userinfo.home.clone())?,
+            known_hosts: KnownHost::get_known_hosts(vfs, userinfo.home.clone())?,
+            programmed_tasks: CrontabSchedule::process_crontab_files(&mut crontab_schedule, 
+                vfs, userinfo.name.clone())?,
+            groups: system_groups.get_groups_for_user(&userinfo.name.clone())?,
+            init_services: InitdService::process_init_services_files(vfs)?,
+            systemd_services: SystemdService::process_services_files(vfs)?
+        })
+
+    }
+
+    pub fn get_system_artifacts(users: SystemInfo, vfs: &mut impl VirtualFileSystem) -> ForensicResult<Vec<Self>> {
+        let mut system_artifacts: Vec<Self> = Vec::new();
+        for user in users.users {
+            let username = user.name;
+            let user_artifact = Self::get_user_artifacts(username, vfs)?;
+            system_artifacts.push(user_artifact);
+        }
+        Ok(system_artifacts)
+    }
+}
+
+impl UserInfo {
+    pub fn get_user_info(username: String, vfs: &mut impl VirtualFileSystem) -> ForensicResult<Self> {
+        let passwd_file = vfs.read_to_string(std::path::PathBuf::from("/etc/passwd").as_path())?;
+        let mut user_info = UserInfo::default();
+    
+        for line in passwd_file.lines() {
+            let columns: Vec<&str> = line.split(':').collect();
+    
+            if columns.len() < 7 {
+                continue;
+            }
+    
+            if columns[0] == username {
+                let id = columns[2].parse::<u32>().map_err(|_| ForensicError::BadFormat)?;
+                let home = PathBuf::from(columns[5]);
+                let shell = columns[6].to_string();
+                let groups = SystemInfo::get_user_groups(vfs, &username)?;
+                user_info = UserInfo {
+                    name: username.clone(),
+                    id,
+                    home,
+                    shell,
+                    groups,
+                };
+            }
+        }
+        Ok(user_info)
+    }
+}
+
+
 impl SystemInfo {
     pub fn load(vfs: &mut impl VirtualFileSystem) -> ForensicResult<Self> {
         // Load user info from /etc/passwd ...
@@ -114,8 +166,8 @@ impl SystemInfo {
         username: &str,
     ) -> ForensicResult<Vec<Group>> {
         // Load user info from /etc/groups ...
-        let system_groups = process_group_file(vfs)?;
-        Ok(system_groups.get_groups_for_user(username))
+        let system_groups = SystemGroups::process_group_file(vfs)?;
+        Ok(system_groups.get_groups_for_user(username)?)
     }
 }
 
@@ -130,10 +182,10 @@ pub fn insert_new_values_to_struct(
     //inserts the key_pair into aliases list
     match atributte.entry(key_pair.0.to_string()) {
         std::collections::hash_map::Entry::Occupied(entry) => {
-            entry.into_mut().insert(key_pair.1.to_string());
+            entry.into_mut().insert(key_pair.1.trim().to_string());
         }
         std::collections::hash_map::Entry::Vacant(_) => {
-            captures_possible_values.insert(key_pair.1.to_string());
+            captures_possible_values.insert(key_pair.1.trim().to_string());
             atributte.insert(key_pair.0.to_string(), captures_possible_values);
         }
     }
@@ -156,28 +208,16 @@ pub fn keys_and_values_from_regex(captures: Captures) -> (&str, &str) {
 }
 
 #[test]
-fn should_execute_start_function() {
+fn should_create_user_info_struct() {
     let base_path = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let bashrc_path = std::path::Path::new(&base_path).join("artifacts");
 
     let mut _std_vfs = StdVirtualFS::new();
     let mut vfs = ChRootFileSystem::new(bashrc_path, Box::new(_std_vfs));
-    let groups_result = SystemInfo::get_user_groups(&mut vfs, "forensicrs");
-    let user_info = match groups_result {
-        Ok(groups) => UserInfo {
-            name: "forensicrs".to_string(),
-            id: 1,
-            home: PathBuf::from("/home/forensicrs"),
-            shell: "/bin/bash".to_string(),
-            groups,
-        },
-        Err(err) => {
-            // handle the error case...
-            // for example, you could return an error value or panic
-            panic!("Failed to get user groups: {:?}", err);
-        }
-    };
+    //let groups_result = SystemInfo::get_user_groups(&mut vfs, "forensicrs");
 
-    let result = UserInfo::load_bash_config(&user_info, &mut vfs).expect("Couldn't process bash");
+    //let result = UserInfo::get_user_info("forensicrs".to_string(), &mut vfs).expect("Couldn't process bash");
+    let result = UserArtifact::get_user_artifacts("forensicrs".to_string(), &mut vfs).expect("Couldn't process bash");
+
     println!("{:?}", result);
 }

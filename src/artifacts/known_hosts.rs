@@ -11,7 +11,7 @@ pub use std::{
     path::{Path, PathBuf},
 };
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct KnownHost {
     pub hostname: String,
     pub key_type: String,
@@ -24,33 +24,35 @@ lazy_static! {
         Regex::new(r#"^([^\s]+)\s+([^\s]+)\s+([^\s]+)\s*(.*)$"#).unwrap();
 }
 
-pub fn get_known_hosts(
-    vfs: &mut impl VirtualFileSystem,
-    user_home_path: PathBuf,
-) -> ForensicResult<Vec<KnownHost>> {
-    let known_hosts = vfs.read_to_string(
-        user_home_path.join(".ssh/known_hosts").as_path())?;
-
-    let reader_groups = std::io::BufReader::new(known_hosts.as_bytes());
-    let mut system_known_hosts: Vec<KnownHost> = Vec::new();
-
-    for known_host in reader_groups.lines() {
-        let known_host = known_host?;
-        let captures = KNOWN_HOSTS_COMPONENTS.captures(&known_host).unwrap();
-        let known_host = KnownHost {
-            hostname: captures.get(1).unwrap().as_str().to_string(),
-            key_type: captures.get(2).unwrap().as_str().to_string(),
-            public_key: captures.get(3).unwrap().as_str().to_string(),
-            comment: captures.get(4).unwrap().as_str().to_string(),
-        };
-        system_known_hosts.push(known_host);
+impl KnownHost {
+    pub fn get_known_hosts(
+        vfs: &mut impl VirtualFileSystem,
+        user_home_path: PathBuf,
+    ) -> ForensicResult<Vec<Self>> {
+        let known_hosts = vfs.read_to_string(
+            user_home_path.join(".ssh/known_hosts").as_path())?;
+    
+        let reader_groups = std::io::BufReader::new(known_hosts.as_bytes());
+        let mut system_known_hosts: Vec<Self> = Vec::new();
+    
+        for known_host in reader_groups.lines() {
+            let known_host = known_host?;
+            let captures = KNOWN_HOSTS_COMPONENTS.captures(&known_host).unwrap();
+            let known_host = Self {
+                hostname: captures.get(1).unwrap().as_str().trim().to_string(),
+                key_type: captures.get(2).unwrap().as_str().trim().to_string(),
+                public_key: captures.get(3).unwrap().as_str().trim().to_string(),
+                comment: captures.get(4).unwrap().as_str().trim().to_string(),
+            };
+            system_known_hosts.push(known_host);
+        }
+    
+        Ok(system_known_hosts)
     }
-
-    Ok(system_known_hosts)
 }
 
 #[test]
-fn should_process_group_file() {
+fn should_process_known_hosts_file() {
     let base_path = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let virtual_file_system = &Path::new(&base_path).join("artifacts");
 
@@ -63,7 +65,20 @@ fn should_process_group_file() {
         shell: "/bin/bash".to_string(),
         groups: Vec::new(),
     };
-    let known_hosts = get_known_hosts(&mut vfs, user_info.home);
+    let authorized_keys = KnownHost::get_known_hosts(&mut vfs, user_info.home);
 
-    print!("{:?}", known_hosts);
+    match authorized_keys {
+        Ok(keys) => {
+            let authorized_key_test = KnownHost {
+                hostname: "|1|TfKl866biYXUtnTkYkd0hRxU3qU=|8wzgJpCzm2GrhwDS507gudKHlO4=".to_string(),
+                key_type: "ssh-ed25519".to_string(),
+                public_key: String::from(r#"AAAAC3NzaC1lZDI1NTE5AAAAIDwrpaWIiSPnPg5HPKCVfYXzkTF6m3eTMSfnopZSiNE8"#),
+                comment: "".to_string()
+            };
+            assert_eq!(authorized_key_test, keys[0]);
+        },
+        Err(e) => {
+            panic!("Error getting known_hosts: {:?}", e);
+        }
+    }
 }

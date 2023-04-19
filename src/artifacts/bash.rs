@@ -20,7 +20,7 @@ pub struct BashHistory {
 }
 
 impl BashHistory {
-    //Creates a BashHistory struct with commands assigned to the time of its execution
+    //Reads the .bash_history with and modifies the BashHistory struct adding new commands
     pub fn read_history_timestamps<P>(
         &mut self,
         user_home_path: P,
@@ -28,15 +28,19 @@ impl BashHistory {
     ) where
         P: AsRef<std::path::Path>,
     {
-        let path = PathBuf::from(user_home_path.as_ref());
-        let history_contents = match vfs.read_to_string(path.join(".bash_history").as_path()) {
+        let path = Path::new(user_home_path.as_ref());
+        let history_path = path.join(".bash_history");
+        //converts the content of the .bash_history path to string
+        let history_contents = match vfs.read_to_string(history_path.as_path()) {
             Ok(v) => v,
             Err(_e) => return,
         };
 
         let mut last_timestamp: Option<NaiveDateTime> = None;
 
+        //reads each line of the .bash_history
         for line in history_contents.lines() {
+            //the timestamps start with #
             if line.starts_with('#') {
                 let timestamp = &line[1..];
                 let timestamp = NaiveDateTime::from_timestamp_opt(
@@ -46,19 +50,35 @@ impl BashHistory {
                 last_timestamp = timestamp;
             } else {
                 self.commands
-                    .push((last_timestamp.clone(), line.to_string()));
+                    .push((last_timestamp.clone(), line.trim().to_string()));
             }
         }
+    }
+
+    //Creates a BashHistory struct processing the .bash_history file
+    pub fn load_bash_history(
+        user_info: UserInfo,
+        fs: &mut impl VirtualFileSystem,
+    ) -> ForensicResult<Self> {
+        let mut bash_history = Self::default();
+
+        let user_home = user_info.home.as_path().join(".bash_history");
+
+        bash_history.read_history_timestamps(user_home, fs);
+
+        Ok(bash_history)
     }
 }
 
 impl BashRcConfig {
+    //returns the generic bash config files
     pub fn generic_bash_file_paths() -> Vec<PathBuf> {
         vec![
             PathBuf::from("/etc/profile"),
             PathBuf::from("/etc/bash.bashrc"),
         ]
     }
+    //returns the user bash config files
     pub fn get_user_bash_files_path(user_home_path: &Path) -> Vec<PathBuf> {
         return vec![
             user_home_path.join(".bashrc"),
@@ -68,6 +88,18 @@ impl BashRcConfig {
             user_home_path.join(".bash_logout"),
         ];
     }
+    //Creates a BashRcConfig struct processing all the bash configuration files
+    pub fn load_bash_config(
+        user_info: UserInfo,
+        fs: &mut impl VirtualFileSystem,
+    ) -> ForensicResult<Self> {
+        let mut rc_config = Self::default();
+        rc_config.process_bashrcfile(user_info.home.as_path(), fs);
+
+        Ok(rc_config)
+    }
+
+    //Reads all the bash configuration files and adds the new values to the struct
     pub fn process_bashrcfile<P>(&mut self, user_home_path: P, vfs: &mut impl VirtualFileSystem)
     where
         P: AsRef<std::path::Path>,
@@ -129,7 +161,7 @@ mod bash_tests {
         BashRcConfig::process_bashrcfile(&mut rc_config, user_info.home, &mut vfs);
 
         let alert_variable_value: BTreeSet<String> =
-            BTreeSet::from([String::from(r#"${BWhite}${On_Red} "#)]);
+            BTreeSet::from([String::from(r#"${BWhite}${On_Red}"#)]);
 
         assert_eq!(
             &alert_variable_value,
@@ -146,10 +178,9 @@ mod bash_tests {
             rc_config.aliases.get("rm").expect("Should exist rm alias")
         );
 
-        //println!("{:?}", rc_config);
         let export_histtimeformat_value: BTreeSet<String> = BTreeSet::from([
-            String::from(r#"$(echo -e ${BCyan})[%d/%m %H:%M:%S]$(echo -e ${NC}) "#),
-            String::from("%d/%m/%y %T "),
+            String::from(r#"$(echo -e ${BCyan})[%d/%m %H:%M:%S]$(echo -e ${NC})"#),
+            String::from("%d/%m/%y %T"),
         ]);
 
         assert_eq!(
@@ -159,31 +190,35 @@ mod bash_tests {
                 .get("HISTTIMEFORMAT")
                 .expect("Should exist HISTTIMEFORMAT export")
         );
-        println!("{:?}", rc_config);
     }
+
 
     #[test]
     fn should_read_history_timestamps() {
         let user_info = UserInfo {
-            name: "gwanza".to_string(),
+            name: "forensicrs".to_string(),
             id: 1,
-            home: PathBuf::from("/home/gwanza"),
+            home: PathBuf::from("/home/forensicrs"),
             shell: "/bin/bash".to_string(),
             groups: Vec::new(),
         };
         let user_home = user_info.home;
         let mut rc_history = BashHistory::default();
+        let base_path = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+        let virtual_file_system = &Path::new(&base_path).join("artifacts");
+
         let mut _std_vfs = StdVirtualFS::new();
-        let mut vfs = ChRootFileSystem::new("/", Box::new(_std_vfs));
+        let mut vfs = ChRootFileSystem::new(virtual_file_system, Box::new(_std_vfs));
+
         BashHistory::read_history_timestamps(&mut rc_history, user_home, &mut vfs);
 
         let mut test_command: Vec<(Option<NaiveDateTime>, String)> = Vec::with_capacity(1_000);
 
-        let d = NaiveDate::from_ymd_opt(2023, 01, 18).unwrap();
-        let t = NaiveTime::from_hms_milli_opt(08, 17, 06, 00).unwrap();
+        let d = NaiveDate::from_ymd_opt(2023, 01, 19).unwrap();
+        let t = NaiveTime::from_hms_milli_opt(06, 37, 06, 00).unwrap();
         test_command.push((
             Some(NaiveDateTime::new(d, t)),
-            "vim ~/.bash_history ".to_string(),
+            "vim ~/.bash_history".to_string(),
         ));
 
         assert_eq!(
@@ -191,4 +226,4 @@ mod bash_tests {
             rc_history.commands.get(0).expect("Date time to compare")
         );
     }
-}
+}  

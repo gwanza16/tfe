@@ -1,4 +1,5 @@
 pub use crate::ChRootFileSystem;
+pub use crate::prelude::{UserInfo, group::SystemGroups};
 pub use forensic_rs::{
     core::fs::StdVirtualFS, prelude::ForensicResult, traits::vfs::VirtualFileSystem,
 };
@@ -10,7 +11,7 @@ pub use std::{
     path::{Path, PathBuf},
 };
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct CrontabSchedule {
     pub minute: String,
     pub hour: String,
@@ -19,7 +20,7 @@ pub struct CrontabSchedule {
     pub day_of_week: String,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct CrontabTask {
     pub username: String,
     pub command: String,
@@ -35,6 +36,7 @@ lazy_static! {
 }
 
 impl CrontabSchedule {
+    //reads all crontab files and returns a CrontabTask struct
     pub fn process_crontab_files(
         &mut self,
         vfs: &mut impl VirtualFileSystem,
@@ -98,6 +100,7 @@ impl CrontabSchedule {
         Ok(crontab_tasks)
     }
 
+    //returns a vec of all the crontab files paths of the system
     pub fn get_crontab_files(username: String) -> Vec<PathBuf> {
         let mut file_paths: Vec<PathBuf> = Vec::new();
 
@@ -129,13 +132,39 @@ fn should_process_crontab_file() {
 
     let mut _std_vfs = StdVirtualFS::new();
     let mut vfs = ChRootFileSystem::new(virtual_file_system, Box::new(_std_vfs));
+    let user_info = UserInfo {
+        name: "forensicrs".to_string(),
+        id: 1,
+        home: PathBuf::from("/home/forensicrs"),
+        shell: "/bin/bash".to_string(),
+        groups: Vec::new(),
+    };
 
     let mut crontab_schedule = CrontabSchedule::default();
-    let system_groups = CrontabSchedule::process_crontab_files(
+    let crontab_tasks = CrontabSchedule::process_crontab_files(
         &mut crontab_schedule,
         &mut vfs,
-        "forensicrs".to_string(),
+        user_info.name,
     );
 
-    print!("{:?}", system_groups);
+    match crontab_tasks {
+        Ok(task) => {
+            let crontab_schedule = CrontabSchedule {
+                minute: "17".to_string(),
+                hour: "*".to_string(),
+                day_of_month: "*".to_string(),
+                month: "*".to_string(),
+                day_of_week: "*".to_string(),
+            };
+            let crontab_task = CrontabTask {
+                username: "root".to_string(),
+                command: "cd / && run-parts --report /etc/cron.hourly".to_string(),
+                schedule: crontab_schedule
+            };
+            assert_eq!(crontab_task, task[0]);
+        },
+        Err(e) => {
+            panic!("Error getting authorized keys: {:?}", e);
+        }
+    }
 }

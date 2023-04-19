@@ -1,12 +1,12 @@
 pub use crate::prelude::{known_hosts, UserInfo};
 pub use crate::ChRootFileSystem;
-use configparser::ini::{Ini};
+use configparser::ini::Ini;
 pub use forensic_rs::traits::vfs;
 pub use forensic_rs::{
     core::fs::StdVirtualFS, prelude::ForensicResult, traits::vfs::VirtualFileSystem,
 };
 
-use std::collections::{HashMap};
+use std::collections::HashMap;
 
 pub use std::{
     fs,
@@ -14,13 +14,13 @@ pub use std::{
     path::{Path, PathBuf},
 };
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct InitdService {
     pub service_name: String,
     pub service_script: String,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct SystemdService {
     pub service_name: String,
     pub config: HashMap<String, HashMap<String, Option<String>>>,
@@ -57,7 +57,9 @@ impl InitdService {
 }
 
 impl SystemdService {
-    pub fn process_services_files(vfs: &mut impl VirtualFileSystem) -> Vec<SystemdService> {
+    pub fn process_services_files(
+        vfs: &mut impl VirtualFileSystem,
+    ) -> ForensicResult<Vec<SystemdService>> {
         let mut config = Ini::new();
         let services_paths = Self::get_services_paths();
         let mut services_vec: Vec<SystemdService> = Vec::new();
@@ -65,53 +67,28 @@ impl SystemdService {
         for path in services_paths {
             if let Ok(services) = vfs.read_dir(&path) {
                 for service in services {
-                    if let forensic_rs::traits::vfs::VDirEntry::File(file_name) = service {
-                        if Self::check_if_service_file(&file_name) {
-                            let service_script = match vfs.read_to_string(&path.join(&file_name)) {
-                                Ok(script) => script,
-                                Err(_) => "".to_string(),
-                            };
-
-                            let file = config.read(service_script);
-
-                            let new_service = SystemdService {
-                                service_name: file_name,
-                                config: match file {
-                                    Ok(config) => config,
-                                    _ => continue,
-                                },
-                            };
-
-                            services_vec.push(new_service);
-
-                        }
+                    if let forensic_rs::traits::vfs::VDirEntry::File(mut file_name) = service {
+                        services_vec.push(Self::insert_new_services(
+                            vfs,
+                            &path,
+                            &mut file_name,
+                            &mut config,
+                        )?);
                     } else if let forensic_rs::traits::vfs::VDirEntry::Directory(dir_name) = service
                     {
                         //si se trata de un directorio se procesa los ficheros que tenga de servicios
                         if let Ok(files) = vfs.read_dir(&path.join(dir_name)) {
                             for file in files {
-                                if let forensic_rs::traits::vfs::VDirEntry::File(dir_service_name) =
-                                    file
+                                if let forensic_rs::traits::vfs::VDirEntry::File(
+                                    mut dir_service_name,
+                                ) = file
                                 {
-                                    if Self::check_if_service_file(&dir_service_name) {
-                                        let service_script = match vfs.read_to_string(&path.join(&dir_service_name)) {
-                                            Ok(script) => script,
-                                            Err(_) => "".to_string(),
-                                        };
-            
-                                        let file = config.read(service_script);
-
-                                        let new_service = SystemdService {
-                                            service_name: dir_service_name,
-                                            config: match file {
-                                                Ok(config) => config,
-                                                _ => continue,
-                                            },
-                                        };
-            
-                                        services_vec.push(new_service);
-            
-                                    }
+                                    services_vec.push(Self::insert_new_services(
+                                        vfs,
+                                        &path,
+                                        &mut dir_service_name,
+                                        &mut config,
+                                    )?);
                                 }
                             }
                         }
@@ -122,13 +99,41 @@ impl SystemdService {
             }
         }
 
-        services_vec
+        Ok(services_vec)
+    }
+
+    pub fn insert_new_services(
+        vfs: &mut impl VirtualFileSystem,
+        path: &Path,
+        file_name: &mut String,
+        config: &mut Ini,
+    ) -> ForensicResult<SystemdService> {
+        let mut new_service: SystemdService = Self::default();
+
+        if Self::check_if_service_file(&file_name) {
+            let service_script = match vfs.read_to_string(&path.join(&file_name)) {
+                Ok(script) => script,
+                Err(_) => "".to_string(),
+            };
+
+            let file = config.read(service_script);
+
+            new_service = SystemdService {
+                service_name: file_name.to_string(),
+                config: match file {
+                    Ok(config) => config,
+                    Err(e) => return Err(forensic_rs::prelude::ForensicError::Other(e)),
+                },
+            };
+        }
+
+        Ok(new_service)
     }
 
     pub fn get_services_paths() -> Vec<PathBuf> {
         return vec![
             PathBuf::from("/usr/lib/systemd/system"),
-            PathBuf::from("/usr/lib/sysstemd/user"),
+            PathBuf::from("/usr/lib/systemd/user"),
             PathBuf::from("/lib/systemd/system"),
             PathBuf::from("/etc/systemd/system"),
         ];
@@ -145,14 +150,58 @@ impl SystemdService {
     }
 }
 
-#[test]
-fn should_process_group_file() {
-    let base_path = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-    let virtual_file_system = &Path::new(&base_path).join("artifacts");
-    let mut _std_vfs = StdVirtualFS::new();
-    let mut vfs = ChRootFileSystem::new(virtual_file_system, Box::new(_std_vfs));
+mod services_tests {
+    pub use std::{collections::HashMap, path::Path};
 
-    let initd_services = SystemdService::process_services_files(&mut vfs);
+    pub use forensic_rs::core::fs::StdVirtualFS;
 
-    println!("{:?}", initd_services);
+    pub use crate::ChRootFileSystem;
+
+    pub use super::{InitdService, SystemdService};
+
+    #[test]
+    fn should_process_initd_services() {
+        let base_path = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+        let virtual_file_system = &Path::new(&base_path).join("artifacts");
+        let mut _std_vfs = StdVirtualFS::new();
+        let mut vfs = ChRootFileSystem::new(virtual_file_system, Box::new(_std_vfs));
+
+        let initd_services = InitdService::process_init_services_files(&mut vfs);
+
+        match initd_services {
+            Ok(initd_service) => {
+                let initd_service_test = InitdService {
+                    service_name: "apache2".to_string(),
+                    service_script: "hola".to_string(),
+                };
+                assert_eq!(initd_service_test, initd_service[0]);
+            }
+            Err(e) => {
+                panic!("Error getting authorized keys: {:?}", e);
+            }
+        }
+    }
+
+    #[test]
+    fn should_process_systemd_services() {
+        let base_path = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+        let virtual_file_system = &Path::new(&base_path).join("artifacts");
+        let mut _std_vfs = StdVirtualFS::new();
+        let mut vfs = ChRootFileSystem::new(virtual_file_system, Box::new(_std_vfs));
+
+        let systemd_services = SystemdService::process_services_files(&mut vfs);
+
+        match systemd_services {
+            Ok(systemd_service) => {
+                let systemd_service_test = SystemdService {
+                    service_name: "tortuga.service".to_string(),
+                    config: HashMap::new(),
+                };
+                assert_eq!(systemd_service_test, systemd_service[2]);
+            }
+            Err(e) => {
+                panic!("Error getting authorized keys: {:?}", e);
+            }
+        }
+    }
 }
