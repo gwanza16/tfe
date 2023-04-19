@@ -9,7 +9,7 @@
 #umask 022
 
 # if running bash
-if [ -n "$BASH_VERSION" ]; then
+if [ -n "$BASH_VERSION" ]; the
     # include .bashrc if it exists
     if [ -f "$HOME/.bashrc" ]; then
         . "$HOME/.bashrc"
